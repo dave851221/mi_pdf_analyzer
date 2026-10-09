@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>數量佔比分析</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>數量佔比分析</h1>
+    <p class="privacy">所有辨識與計算都在你的瀏覽器內完成。檔案不會上傳，設定也只存在這台電腦的瀏覽器裡。</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="選擇或拖曳檔案">
+        <strong>把 PDF 拖曳到這裡，或點一下選擇檔案</strong>
+        <span>可一次放入多個 PDF。也可以放入先前匯出、修正過的明細 CSV（會取代目前的資料）。</span>
+      </div>
+      <input id="file-input" type="file" accept=".pdf,.csv" multiple hidden>
+      <div id="status" class="status" hidden>
+        <div class="progress"><div id="progress-bar"></div></div>
+        <span id="status-text"></span>
+      </div>
+      <ul id="messages" class="messages"></ul>
+    </section>
+
+    <details id="settings" class="card settings">
+      <summary>設定（院區清單、藥品清單、報表標題）</summary>
+      <p class="hint">這些內容只存在這台電腦的瀏覽器。有了清單，辨識結果會自動比對，需要人工確認的格子會少很多。</p>
+      <div class="settings-grid">
+        <label>報表標題（選填）
+          <input id="set-title" type="text" placeholder="顯示在圖表上方">
+        </label>
+        <label>院區清單（每行一個）
+          <textarea id="set-sites" rows="8" spellcheck="false"></textarea>
+        </label>
+        <label>藥品清單（每行一筆：藥材碼, 品名）
+          <textarea id="set-catalog" rows="8" spellcheck="false"></textarea>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="set-save" class="primary">儲存設定</button>
+        <button id="set-export">匯出設定檔</button>
+        <button id="set-import">匯入設定檔</button>
+        <input id="set-file" type="file" accept=".json" hidden>
+        <span id="set-note" class="hint"></span>
+      </div>
+    </details>
+
+    <section id="results" class="card" hidden>
+      <h2 id="results-title">分析結果</h2>
+      <div id="banners"></div>
+      <div class="filters">
+        <fieldset>
+          <legend>選定院區（分子）</legend>
+          <div id="site-filter" class="chips"></div>
+        </fieldset>
+        <fieldset>
+          <legend>期間</legend>
+          <div id="period-filter" class="chips"></div>
+        </fieldset>
+      </div>
+      <p id="formula" class="hint"></p>
+      <div id="chart" class="viz-root"></div>
+      <div class="table-wrap">
+        <table id="result-table" class="data"></table>
+      </div>
+      <details class="matrix">
+        <summary>各院區數量一覽</summary>
+        <div class="table-wrap"><table id="matrix-table" class="data"></table></div>
+      </details>
+      <div class="actions">
+        <button id="export-result">匯出結果 CSV</button>
+        <button id="export-detail">匯出明細 CSV（可修改後再匯入）</button>
+        <button id="clear-all" class="danger">清除全部資料</button>
+      </div>
+    </section>
+
+    <section id="details" class="card" hidden>
+      <div class="details-head">
+        <h2>明細與校對</h2>
+        <label class="toggle"><input id="only-pending" type="checkbox"> 只顯示待確認</label>
+      </div>
+      <p class="hint">黃色的格子表示需要你對照原圖確認。修改內容，或按「本頁確認無誤」，就會取消標記。</p>
+      <div id="pages"></div>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

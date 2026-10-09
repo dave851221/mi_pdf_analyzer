@@ -1,0 +1,6 @@
+# Source documents, exports and personal settings must never be committed.
+*.pdf
+*.csv
+local-settings.json
+screenshots/
+node_modules/
