@@ -323,6 +323,7 @@ function renderNewPage(page) {
   renderResults();
   $('pages').insertAdjacentHTML('beforeend', renderPage(page));
   renderSiteOptions();
+  updateAllClear();
 }
 
 function renderAll() {
@@ -412,6 +413,15 @@ function renderMatrix(results, sites) {
 function renderPages() {
   $('pages').innerHTML = state.pages.map(renderPage).join('');
   renderSiteOptions();
+  updateAllClear();
+}
+
+// With the pending-only filter on, a fully confirmed data set shows no cards
+// at all; say so rather than leaving the section looking empty.
+function updateAllClear() {
+  const filtering = $('only-pending').checked;
+  $('pages').classList.toggle('only-pending', filtering);
+  $('all-clear').hidden = !filtering || !state.pages.length || state.pages.some((p) => p.error || pendingCount(p) > 0);
 }
 
 function renderSiteOptions() {
@@ -594,7 +604,7 @@ function init() {
       renderAll();
     }
   });
-  $('only-pending').addEventListener('change', (e) => $('pages').classList.toggle('only-pending', e.target.checked));
+  $('only-pending').addEventListener('change', updateAllClear);
 
   $('export-detail').addEventListener('click', () => download('明細.csv', detailCsv(), 'text/csv;charset=utf-8'));
   $('export-result').addEventListener('click', () => download('佔比結果.csv', resultCsv(), 'text/csv;charset=utf-8'));

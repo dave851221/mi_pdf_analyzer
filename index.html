@@ -82,10 +82,11 @@
     <section id="details" class="card" hidden>
       <div class="details-head">
         <h2>明細與校對</h2>
-        <label class="toggle"><input id="only-pending" type="checkbox"> 只顯示待確認</label>
+        <label class="toggle"><input id="only-pending" type="checkbox" checked> 只顯示待確認</label>
       </div>
       <p class="hint">黃色的格子表示需要你對照原圖確認。修改內容，或按「本頁確認無誤」，就會取消標記。</p>
-      <div id="pages"></div>
+      <p id="all-clear" class="all-clear" hidden>目前沒有待確認的格子。取消勾選右上角的「只顯示待確認」可以查看全部明細。</p>
+      <div id="pages" class="only-pending"></div>
     </section>
   </main>
 

@@ -177,6 +177,7 @@ table.data td.num, table.data th.num { text-align: right; font-variant-numeric: 
 .flagged { background: var(--flag-bg) !important; border-color: var(--flag-border) !important; }
 .flag-note { font-size: 12.5px; color: var(--text-secondary); white-space: normal; }
 .only-pending .page-card:not(.has-flag), .only-pending tr.row:not(.has-flag) { display: none; }
+.all-clear { margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--ok); }
 .badge { font-size: 12.5px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--text-secondary); }
 .badge.pending { background: var(--flag-bg); border-color: var(--flag-border); color: var(--text-primary); }
 
