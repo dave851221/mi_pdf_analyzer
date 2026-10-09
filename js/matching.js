@@ -20,7 +20,10 @@ function similarity(a, b) {
 }
 
 const normName = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-const normCode = (s) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+const normCode = (s) => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+// Codes that differ only in punctuation, spacing or case are the same code.
+export const codeKey = normCode;
 
 // Returns { code, name, flag }. flag is null when the row was identified with
 // confidence, otherwise a message explaining why a human should look at it.
@@ -39,11 +42,17 @@ export function matchCatalog(codeText, nameText, catalog) {
   const hit = (s, flag = null) => ({ code: s.entry.code, name: s.entry.name, flag });
 
   // Accept silently only on strong, corroborated evidence.
-  if (exact && exact.ns >= 0.8) return hit(exact);
+  // An exact code is trusted only when no other drug's name fits better: a
+  // code that lost its last character can equal a sibling drug's code.
+  if (exact && exact.ns >= 0.8 && exact.ns >= bestName.ns) return hit(exact);
   if (bestName && bestName.ns === 1 && margin > 0 && bestName.cs >= 0.6) return hit(bestName);
   if (bestName && bestName.ns >= 0.9 && margin >= 0.1 && bestName.cs >= 0.6) return hit(bestName);
   if (bestName && bestName.ns >= 0.9 && margin >= 0.3 && bestName.cs >= 0.4) return hit(bestName);
-  if (exact) return hit(exact, '藥材碼與品名對不上，請確認');
+  if (exact) {
+    return hit(exact, exact.entry.name
+      ? '藥材碼與品名對不上，請確認'
+      : '清單裡這個藥材碼沒有填品名，無法交叉確認，請對照原圖');
+  }
 
   // Otherwise never substitute a guess: the list may simply be incomplete.
   // Keep what was read and let the user decide.
@@ -68,7 +77,8 @@ export function matchSite(headerText, sites) {
     return { site: raw, flag: raw ? '尚未設定院區清單，請確認院區名稱' : '無法辨識院區，請輸入' };
   }
   const contained = sites.filter((s) => line.includes(s));
-  if (contained.length === 1) return { site: contained[0], flag: null };
+  // Without the label there is no telling which part of the text is the site.
+  if (contained.length === 1) return { site: contained[0], flag: m ? null : '找不到「申請院區」字樣，請確認院區' };
   if (contained.length > 1) return { site: contained[0], flag: '讀到多個院區名稱，請確認' };
   // Not in the list (it may be incomplete): keep the reading, never guess.
   const raw = cleanSite(line);

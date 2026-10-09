@@ -1,6 +1,6 @@
 import { extractPage } from './extract.js';
 import { createEngine, openPdf, renderPageGray, grayToDataUrl } from './ocr.js';
-import { matchCatalog, matchSite, parseQty, periodLabel } from './matching.js';
+import { matchCatalog, matchSite, parseQty, periodLabel, codeKey } from './matching.js';
 import { toCsv, parseDetailCsv, decodeCsvBytes, DETAIL_COLUMNS } from './csv.js';
 import {
   loadSettings, saveSettings, parseSettingsJson,
@@ -59,11 +59,22 @@ async function processFiles(files) {
   for (const f of files) if (!csvs.includes(f) && !pdfs.includes(f)) addMessage(`${f.name}：不支援的檔案類型（只接受 PDF 或 CSV）`, 'error');
 
   if (csvs.length) await importCsv(csvs);
-  for (let i = 0; i < pdfs.length; i++) await processPdf(pdfs[i], i, pdfs.length);
+  for (let i = 0; i < pdfs.length; i++) {
+    try {
+      await processPdf(pdfs[i], i, pdfs.length);
+    } catch (err) {
+      console.error(err);
+      addMessage(`${pdfs[i].name}：處理失敗（${err.message || err}）`, 'error');
+    }
+  }
   setStatus(null);
 }
 
 async function processPdf(file, index, total) {
+  if (state.pages.some((p) => p.source === 'pdf' && p.file === file.name)) {
+    addMessage(`${file.name}：已經載入過同名的檔案，這次略過。要重新辨識請先刪除它的頁面，或按「清除全部資料」。`, 'error');
+    return;
+  }
   if (!engine) {
     setStatus('正在載入辨識引擎（第一次會比較久）…', 0);
     engine = await createEngine();
@@ -78,10 +89,17 @@ async function processPdf(file, index, total) {
   const pageCount = pdf.numPages;
   for (let n = 1; n <= pageCount; n++) {
     setStatus(`${file.name}：辨識第 ${n} / ${pageCount} 頁`, (index + (n - 1) / pageCount) / total);
-    const gray = await renderPageGray(pdf, n);
-    const result = await extractPage(gray, engine, state.settings);
-    state.pages.push(toPage(file.name, n, result));
-    renderAll();
+    let result;
+    try {
+      const gray = await renderPageGray(pdf, n);
+      result = await extractPage(gray, engine, state.settings);
+    } catch (err) {
+      console.error(err);
+      result = { error: `辨識時發生錯誤（${err.message || err}）` };
+    }
+    const page = toPage(file.name, n, result);
+    state.pages.push(page);
+    renderNewPage(page);
   }
   await close();
   addMessage(`${file.name}：完成，共 ${pageCount} 頁`, 'ok');
@@ -143,7 +161,9 @@ async function importCsv(files) {
 function learn(site, drugs) {
   const s = state.settings;
   if (site && !s.sites.includes(site)) s.sites.push(site);
-  for (const d of drugs) if (d.code && !s.catalog.some((e) => e.code === d.code)) s.catalog.push({ code: d.code, name: d.name });
+  for (const d of drugs) {
+    if (codeKey(d.code) && !s.catalog.some((e) => codeKey(e.code) === codeKey(d.code))) s.catalog.push({ code: d.code, name: d.name });
+  }
   state.settings = saveSettings(s);
   renderSettings();
   rematch();
@@ -178,7 +198,7 @@ function pendingCount(page) {
   if (page.flags.site || !page.site) n++;
   if (page.flags.period) n++;
   for (const row of page.rows) {
-    if (row.flags.code || !row.code) n++;
+    if (row.flags.code || !codeKey(row.code)) n++;
     if (row.flags.qty || qtyProblem(row)) n++;
   }
   return n;
@@ -195,22 +215,30 @@ function allPeriods() {
 }
 
 function computeResults() {
+  // Keyed by normalised code so "*AB1", "AB1" and "ab1" add up together.
+  const listed = new Map(state.settings.catalog.map((e, i) => [codeKey(e.code), { ...e, rank: i }]));
   const drugs = new Map();
   for (const page of state.pages) {
     if (page.error || !state.selectedPeriods.has(page.period)) continue;
     for (const row of page.rows) {
-      const qty = parseQty(row.qty);
-      if (qty === null || !row.code) continue;
-      if (!drugs.has(row.code)) drugs.set(row.code, { code: row.code, name: row.name, selected: 0, total: 0, bySite: new Map() });
-      const d = drugs.get(row.code);
+      const qty = parseQty(row.qty), key = codeKey(row.code);
+      if (qty === null || !key) continue;
+      if (!drugs.has(key)) {
+        const entry = listed.get(key);
+        drugs.set(key, {
+          code: entry ? entry.code : row.code, name: (entry && entry.name) || row.name,
+          rank: entry ? entry.rank : 1e6 + drugs.size, selected: 0, total: 0, bySite: new Map(),
+        });
+      }
+      const d = drugs.get(key);
+      if (!d.name) d.name = row.name;
       d.total += qty;
       d.bySite.set(page.site, (d.bySite.get(page.site) || 0) + qty);
       if (state.selectedSites.has(page.site)) d.selected += qty;
     }
   }
-  const order = new Map(state.settings.catalog.map((e, i) => [e.code, i]));
   const list = [...drugs.values()];
-  list.forEach((d, i) => { d.rank = order.has(d.code) ? order.get(d.code) : 1e6 + i; d.share = d.total ? d.selected / d.total : null; });
+  for (const d of list) d.share = d.total ? d.selected / d.total : null;
   return list.sort((a, b) => a.rank - b.rank);
 }
 
@@ -219,7 +247,36 @@ function collectWarnings() {
   const pending = state.pages.reduce((n, p) => n + pendingCount(p), 0);
   if (pending) out.push(`還有 <b>${pending}</b> 格待確認，確認前結果可能不正確。<a href="#details">前往校對</a>`);
 
-  for (const p of state.pages) if (p.error) out.push(`${esc(p.file)} 第 ${esc(p.pageNo)} 頁無法判讀（${esc(p.error)}），這一頁沒有計入。`);
+  const where = (p) => `${esc(p.file)} 第 ${esc(p.pageNo) || '—'} 頁`;
+  const spellings = new Map();
+  for (const p of state.pages) {
+    if (p.error) { out.push(`${where(p)}無法判讀（${esc(p.error)}），<b>這一頁沒有計入</b>。`); continue; }
+    for (const w of p.warnings) out.push(`${where(p)}：${esc(w)}`);
+    const counts = new Map();
+    for (const row of p.rows) {
+      const key = codeKey(row.code);
+      if (!key) continue;
+      counts.set(key, (counts.get(key) || 0) + 1);
+      if (!spellings.has(key)) spellings.set(key, new Set());
+      spellings.get(key).add(row.code);
+    }
+    for (const [key, n] of counts) {
+      if (n > 1) out.push(`${where(p)}：藥材碼 ${esc(p.rows.find((r) => codeKey(r.code) === key).code)} 出現 ${n} 次，數量會被加總在一起。`);
+    }
+  }
+  for (const set of spellings.values()) {
+    if (set.size > 1) out.push(`藥材碼 ${[...set].map((c) => `「${esc(c)}」`).join('、')} 只差在符號或大小寫，已視為同一個。`);
+  }
+
+  const byFile = new Map();
+  for (const p of state.pages) {
+    if (p.error || p.source !== 'pdf') continue;
+    if (!byFile.has(p.file)) byFile.set(p.file, new Set());
+    byFile.get(p.file).add(p.period);
+  }
+  for (const [file, periods] of byFile) {
+    if (periods.size > 1) out.push(`${esc(file)} 裡的頁面期間不一致（${[...periods].map((x) => esc(periodLabel(x))).join('、')}），請確認是否有期間讀錯。`);
+  }
 
   const groups = new Map();
   for (const p of state.pages) {
@@ -229,8 +286,7 @@ function collectWarnings() {
   }
   for (const pages of groups.values()) {
     if (pages.length < 2) continue;
-    const where = pages.map((p) => `${esc(p.file)} 第 ${esc(p.pageNo)} 頁`).join('、');
-    out.push(`${esc(periodLabel(pages[0].period))}「${esc(pages[0].site)}」出現 ${pages.length} 次（${where}），數量會被重複計算。請刪除多餘的頁面。`);
+    out.push(`${esc(periodLabel(pages[0].period))}「${esc(pages[0].site)}」出現 ${pages.length} 次（${pages.map(where).join('、')}），數量會被重複計算。請刪除多餘的頁面。`);
   }
 
   const expected = allSites();
@@ -244,15 +300,33 @@ function collectWarnings() {
 
 // ---------- rendering ----------
 
-function renderAll() {
-  const active = document.activeElement && document.activeElement.dataset ? { ...document.activeElement.dataset } : null;
-  for (const period of allPeriods()) {
+// Newly seen periods start selected; sections appear once there is data.
+function syncShell() {
+  const periods = allPeriods();
+  for (const period of periods) {
     if (!state.knownPeriods.has(period)) { state.knownPeriods.add(period); state.selectedPeriods.add(period); }
+  }
+  for (const period of [...state.knownPeriods]) {
+    if (!periods.includes(period)) { state.knownPeriods.delete(period); state.selectedPeriods.delete(period); }
   }
   const has = state.pages.length > 0;
   $('results').hidden = !has;
   $('details').hidden = !has;
-  if (has) { renderResults(); renderPages(); }
+  return has;
+}
+
+// Called as each page finishes OCR. Only appends, so a value the user is in
+// the middle of typing into an earlier page is not wiped by a re-render.
+function renderNewPage(page) {
+  syncShell();
+  renderResults();
+  $('pages').insertAdjacentHTML('beforeend', renderPage(page));
+  renderSiteOptions();
+}
+
+function renderAll() {
+  const active = document.activeElement && document.activeElement.dataset ? { ...document.activeElement.dataset } : null;
+  if (syncShell()) { renderResults(); renderPages(); }
   if (active && active.field) {
     const sel = `[data-page="${active.page}"][data-field="${active.field}"]` + (active.row !== undefined ? `[data-row="${active.row}"]` : '');
     const el = document.querySelector(sel);
@@ -336,6 +410,10 @@ function renderMatrix(results, sites) {
 
 function renderPages() {
   $('pages').innerHTML = state.pages.map(renderPage).join('');
+  renderSiteOptions();
+}
+
+function renderSiteOptions() {
   $('site-options')?.remove();
   const list = document.createElement('datalist');
   list.id = 'site-options';
@@ -353,7 +431,7 @@ function renderPage(page) {
   }
   const siteFlag = page.flags.site || (!page.site ? '請輸入院區' : null);
   const rows = page.rows.map((row, i) => {
-    const codeFlag = row.flags.code || (!row.code ? '藥材碼空白' : null);
+    const codeFlag = row.flags.code || (!codeKey(row.code) ? '藥材碼空白' : null);
     const qtyFlag = row.flags.qty || qtyProblem(row);
     const notes = [codeFlag, qtyFlag].filter(Boolean).map(esc).join('<br>');
     const img = (src) => (src ? `<img class="cell" src="${src}" alt="">` : '');
@@ -416,7 +494,12 @@ function onEdit(input) {
     row[field] = value;
     row.flags[field] = null;
     row.edited[field] = true;
-    if (field === 'code' && value) learn('', [{ code: value, name: row.name }]);
+    if (field === 'code' && codeKey(value)) {
+      // A code already in the list brings its own spelling and product name.
+      const entry = state.settings.catalog.find((e) => codeKey(e.code) === codeKey(value));
+      if (entry) { row.code = entry.code; if (entry.name) row.name = entry.name; }
+      else learn('', [{ code: value, name: row.name }]);
+    }
   }
   renderAll();
 }
@@ -425,10 +508,10 @@ function confirmPage(page) {
   page.flags.period = null;
   if (page.site) { page.flags.site = null; page.edited.site = true; }
   for (const row of page.rows) {
-    if (row.code) { row.flags.code = null; row.edited.code = true; }
+    if (codeKey(row.code)) { row.flags.code = null; row.edited.code = true; }
     if (!qtyProblem(row)) row.flags.qty = null;
   }
-  learn(page.site, page.rows.filter((r) => r.code));
+  learn(page.site, page.rows.filter((r) => codeKey(r.code)));
   renderAll();
 }
 
@@ -503,7 +586,12 @@ function init() {
   $('pages').addEventListener('click', (e) => {
     const { action, page } = e.target.dataset;
     if (action === 'confirm') confirmPage(pageById(page));
-    if (action === 'delete') { state.pages = state.pages.filter((p) => p.id !== +page); renderAll(); }
+    if (action === 'delete') {
+      const target = pageById(page);
+      if (!target || !confirm(`確定要刪除「${target.file}」第 ${target.pageNo || '—'} 頁嗎？`)) return;
+      state.pages = state.pages.filter((p) => p !== target);
+      renderAll();
+    }
   });
   $('only-pending').addEventListener('change', (e) => $('pages').classList.toggle('only-pending', e.target.checked));
 

@@ -12,6 +12,41 @@ export function rgbaToGray(rgba, w, h) {
   return { data, w, h };
 }
 
+// Stretch contrast so ink sits near 0 and paper near 255. Every threshold in
+// this file assumes that, so faint or grey scans must be normalised first.
+export function normalizeContrast(img) {
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < img.data.length; i++) hist[img.data[i]]++;
+  const percentile = (fraction) => {
+    let acc = 0;
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= img.data.length * fraction) return v; }
+    return 255;
+  };
+  const ink = percentile(0.002), paper = percentile(0.5);
+  if (paper - ink < 40 || (ink <= 8 && paper >= 247)) return img; // blank, or already fine
+  const lut = new Uint8Array(256);
+  for (let v = 0; v < 256; v++) lut[v] = Math.max(0, Math.min(255, Math.round(((v - ink) * 255) / (paper - ink))));
+  const data = new Uint8Array(img.data.length);
+  for (let i = 0; i < data.length; i++) data[i] = lut[img.data[i]];
+  return { data, w: img.w, h: img.h };
+}
+
+// Rotate by a multiple of 90 degrees (clockwise).
+export function rotateQuarter(img, degrees) {
+  const { w, h, data } = img;
+  const turns = ((degrees % 360) + 360) % 360 / 90;
+  if (turns === 0) return img;
+  if (turns === 2) return { data: Uint8Array.from(data).reverse(), w, h };
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const nx = turns === 1 ? h - 1 - y : y, ny = turns === 1 ? x : w - 1 - x;
+      out[ny * h + nx] = data[y * w + x];
+    }
+  }
+  return { data: out, w: h, h: w };
+}
+
 // Estimate page skew in degrees by maximising the sharpness of the horizontal
 // projection profile. Table rules dominate the profile, so the peak is crisp.
 export function estimateSkew(img, maxDeg = 3) {
@@ -28,6 +63,7 @@ export function estimateSkew(img, maxDeg = 3) {
       if (dark) { xs.push(x); ys.push(y); }
     }
   }
+  if (!xs.length) return 0;
   const hist = new Float64Array(sh * 3);
   const score = (deg) => {
     hist.fill(0);
@@ -135,6 +171,39 @@ export function crop(img, x0, y0, x1, y1) {
   const data = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) data.set(img.data.subarray((y0 + y) * img.w + x0, (y0 + y) * img.w + x0 + w), y * w);
   return { data, w, h };
+}
+
+// Returns a copy with every blob of ink that touches the image border erased,
+// plus the height of the tallest blob removed. In a crop of a cell whose
+// content is centred, such ink is leftover table rule (rules are never
+// perfectly straight); a tall blob may instead be content cut off by the edge.
+export function stripEdgeInk(img, thresh = 160) {
+  const { w, h } = img;
+  const data = Uint8Array.from(img.data);
+  let tallest = 0;
+  const flood = (sx, sy) => {
+    if (data[sy * w + sx] >= thresh) return;
+    const stack = [sy * w + sx];
+    data[sy * w + sx] = 255;
+    let top = sy, bottom = sy;
+    while (stack.length) {
+      const i = stack.pop(), x = i % w, y = (i - x) / w;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const j = ny * w + nx;
+          if (data[j] < thresh) { data[j] = 255; stack.push(j); }
+        }
+      }
+    }
+    tallest = Math.max(tallest, bottom - top + 1);
+  };
+  for (let x = 0; x < w; x++) { flood(x, 0); flood(x, h - 1); }
+  for (let y = 0; y < h; y++) { flood(0, y); flood(w - 1, y); }
+  return { img: { data, w, h }, tallest };
 }
 
 export function cropCell(img, grid, row, col, inset = 6) {

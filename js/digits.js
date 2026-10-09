@@ -8,17 +8,20 @@ import { TEMPLATES } from './digit-templates.js';
 export const GLYPH_W = 20, GLYPH_H = 24;
 const INK = 160;
 
-// Returns one GLYPH_W x GLYPH_H darkness map (Float32Array, 0..1) per glyph,
-// or null when the cell cannot be split cleanly into separate glyphs.
+// Returns { glyphs, extra }. glyphs holds one GLYPH_W x GLYPH_H darkness map
+// (Float32Array, 0..1) per full-height glyph, or is null when the cell cannot
+// be split cleanly. extra is true when the cell also contains a mark too small
+// to be a digit but too large to be scanner noise: a minus sign, decimal point
+// or thousands separator, any of which changes the value.
 export function segmentGlyphs(cell) {
   const box = inkBox(cell, INK);
-  if (!box) return [];
+  if (!box) return { glyphs: [], extra: false };
   const img = crop(cell, box.x0, box.y0, box.x1, box.y1);
   const colInk = new Int32Array(img.w);
   for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) if (img.data[y * img.w + x] < INK) colInk[x]++;
 
   const glyphs = [];
-  let start = -1;
+  let start = -1, extra = false;
   for (let x = 0; x <= img.w; x++) {
     const ink = x < img.w && colInk[x] > 0;
     if (ink && start < 0) start = x;
@@ -32,12 +35,13 @@ export function segmentGlyphs(cell) {
         }
       }
       const gh = y1 - y0 + 1, gw = x1 - x0 + 1;
-      if (count < 12 || gh < img.h * 0.5) continue; // speck
-      if (gw > gh * 0.9) return null; // touching glyphs
+      if (count < 12) continue; // scanner speck
+      if (gh < img.h * 0.5) { extra = true; continue; }
+      if (gw > gh * 0.9) return { glyphs: null, extra }; // touching glyphs
       glyphs.push(normalizeGlyph(crop(img, x0, y0, x1, y1)));
     }
   }
-  return glyphs;
+  return { glyphs, extra };
 }
 
 function normalizeGlyph(g) {
@@ -71,11 +75,11 @@ export function correlation(a, b) {
 }
 
 // templates: [{ digit, map }], possibly several per digit (one per typeface).
-// Returns { text, score, margin }: score is the weakest glyph's match and
-// margin its lead over the best different digit. text is null if unreadable.
+// Returns { text, score, margin, extra }: score is the weakest glyph's match
+// and margin its lead over the best different digit. text is null if unreadable.
 export function readDigits(cell, templates = TEMPLATES) {
-  const glyphs = segmentGlyphs(cell);
-  if (glyphs === null) return { text: null, score: 0, margin: 0 };
+  const { glyphs, extra } = segmentGlyphs(cell);
+  if (glyphs === null) return { text: null, score: 0, margin: 0, extra };
   let text = '', score = 1, margin = 1;
   for (const g of glyphs) {
     const best = {};
@@ -85,5 +89,5 @@ export function readDigits(cell, templates = TEMPLATES) {
     score = Math.min(score, ranked[0][1]);
     margin = Math.min(margin, ranked[0][1] - ranked[1][1]);
   }
-  return { text, score, margin };
+  return { text, score, margin, extra };
 }
