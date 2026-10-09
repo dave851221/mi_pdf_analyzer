@@ -76,8 +76,9 @@ async function processPdf(file, index, total) {
     return;
   }
   if (!engine) {
-    setStatus('正在載入辨識引擎（第一次會比較久）…', 0);
-    engine = await createEngine();
+    engine = await createEngine((step, of) => {
+      setStatus(`正在載入辨識引擎 ${step} / ${of}（第一次使用需要下載約 6 MB，之後會快很多）…`, (step - 1) / of);
+    });
   }
   let pdf, close;
   try {

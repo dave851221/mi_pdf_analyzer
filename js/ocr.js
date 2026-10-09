@@ -24,20 +24,28 @@ async function makeWorker(langs, params) {
 }
 
 // Returns the { digits, code, line, block, cjk } interface extractPage expects.
-export async function createEngine() {
-  const workers = await Promise.all([
-    makeWorker('eng', { tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: SINGLE_LINE }),
-    makeWorker('eng', { tessedit_char_whitelist: '*ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', tessedit_pageseg_mode: SINGLE_LINE }),
+// Workers are started in stages: the first one downloads the engine and the
+// English data, the second adds the Chinese data, and the rest then start from
+// the browser cache. Starting all five at once makes each of them download
+// the same files again. onStage(step, total) reports progress.
+export async function createEngine(onStage = () => {}) {
+  const digitsOnly = { tessedit_char_whitelist: '0123456789', tessedit_pageseg_mode: SINGLE_LINE };
+  const codeChars = { tessedit_char_whitelist: '*ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', tessedit_pageseg_mode: SINGLE_LINE };
+  onStage(1, 3);
+  const digits = await makeWorker('eng', digitsOnly);
+  onStage(2, 3);
+  const block = await makeWorker(['chi_tra', 'eng'], {});
+  onStage(3, 3);
+  const [code, line, cjk] = await Promise.all([
+    makeWorker('eng', codeChars),
     makeWorker('eng', { tessedit_pageseg_mode: SINGLE_LINE }),
-    makeWorker(['chi_tra', 'eng'], {}),
     makeWorker('chi_tra', { tessedit_pageseg_mode: SINGLE_LINE }),
   ]);
   const reader = (worker) => async (img) => {
     const { data } = await worker.recognize(encodePGM(img));
     return { text: data.text.trim(), conf: data.confidence };
   };
-  const [digits, code, line, block, cjk] = workers.map(reader);
-  return { digits, code, line, block, cjk };
+  return { digits: reader(digits), code: reader(code), line: reader(line), block: reader(block), cjk: reader(cjk) };
 }
 
 // Returns { pdf, close }.
